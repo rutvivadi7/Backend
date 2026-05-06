@@ -1,6 +1,5 @@
 import express from 'express';
 import { body, validationResult } from 'express-validator';
-import nodemailer from 'nodemailer';
 import rateLimit from 'express-rate-limit';
 import pool from '../db.js';
 import authMiddleware from '../middleware/auth.js';
@@ -16,67 +15,22 @@ const careerLimiter = rateLimit({
   },
 });
 
-const createTransporter = () => {
-  if (!process.env.EMAIL_HOST || !process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-    return null;
-  }
-
-  return nodemailer.createTransport({
-    host: process.env.EMAIL_HOST,
-    port: Number(process.env.EMAIL_PORT) || 587,
-    secure: String(process.env.EMAIL_PORT) === '465',
-    auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASS,
-    },
-  });
-};
-
 const talentValidation = [
-  body('firstName')
-    .trim()
-    .isLength({ min: 2, max: 50 })
-    .withMessage('First name must be 2–50 characters.'),
-
-  body('lastName')
-    .trim()
-    .isLength({ min: 2, max: 50 })
-    .withMessage('Last name must be 2–50 characters.'),
-
-  body('email')
-    .isEmail()
-    .normalizeEmail()
-    .withMessage('Valid email required.'),
-
-  body('phone')
-    .optional({ checkFalsy: true })
-    .trim(),
-
-  body('location')
-    .trim()
-    .isLength({ min: 2, max: 100 })
-    .withMessage('Location must be 2–100 characters.'),
-
-  body('jobCategory')
-    .optional({ checkFalsy: true })
-    .trim(),
-
-  body('experience')
-    .optional({ checkFalsy: true })
-    .trim(),
-
-  body('availability')
-    .optional({ checkFalsy: true })
-    .trim(),
+  body('firstName').trim().isLength({ min: 2, max: 50 }).withMessage('First name must be 2–50 characters.'),
+  body('lastName').trim().isLength({ min: 2, max: 50 }).withMessage('Last name must be 2–50 characters.'),
+  body('email').isEmail().normalizeEmail().withMessage('Valid email required.'),
+  body('phone').optional({ checkFalsy: true }).trim(),
+  body('location').trim().isLength({ min: 2, max: 100 }).withMessage('Location must be 2–100 characters.'),
+  body('jobCategory').optional({ checkFalsy: true }).trim(),
+  body('experience').optional({ checkFalsy: true }).trim(),
+  body('availability').optional({ checkFalsy: true }).trim(),
 ];
 
-// ─── POST /api/careers/talent-network ─────────────────────────────────────
+// POST /api/careers/talent-network
 router.post('/talent-network', careerLimiter, talentValidation, async (req, res) => {
   const errors = validationResult(req);
 
   if (!errors.isEmpty()) {
-    console.log('Validation errors:', errors.array());
-
     return res.status(400).json({
       success: false,
       message: 'Validation failed.',
@@ -115,36 +69,10 @@ router.post('/talent-network', careerLimiter, talentValidation, async (req, res)
       ]
     );
 
-    const transporter = createTransporter();
-
-    if (transporter) {
-      transporter.sendMail({
-        from: process.env.EMAIL_FROM || process.env.EMAIL_USER,
-        to: (process.env.EMAIL_TO || process.env.EMAIL_USER)
-          .split(',')
-          .map((e) => e.trim()),
-        subject: `New Talent Network Submission #${result.insertId}`,
-        html: `
-          <h2>New Talent Network Submission</h2>
-          <p><b>Name:</b> ${firstName} ${lastName}</p>
-          <p><b>Email:</b> ${email}</p>
-          <p><b>Phone:</b> ${phone || '-'}</p>
-          <p><b>Location:</b> ${location}</p>
-          <p><b>Job Category:</b> ${jobCategory}</p>
-          <p><b>Experience:</b> ${experience}</p>
-          <p><b>Availability:</b> ${availability}</p>
-        `,
-      }).catch((mailErr) => {
-        console.warn('Talent network email failed but data saved:', mailErr.message);
-      });
-    }
-
     return res.json({
       success: true,
       message: 'Thank you for joining our talent network! We will contact you when suitable opportunities arise.',
-      data: {
-        id: result.insertId,
-      },
+      data: { id: result.insertId },
     });
   } catch (err) {
     console.error('Talent network MySQL error:', err);
@@ -152,12 +80,11 @@ router.post('/talent-network', careerLimiter, talentValidation, async (req, res)
     return res.status(500).json({
       success: false,
       message: 'Failed to submit talent network form.',
-      error: process.env.NODE_ENV === 'development' ? err.message : undefined,
     });
   }
 });
 
-// ─── GET /api/careers/jobs ─────────────────────────────────────────────────
+// GET /api/careers/jobs
 router.get('/jobs', async (req, res) => {
   try {
     const [jobs] = await pool.query(
@@ -182,7 +109,7 @@ router.get('/jobs', async (req, res) => {
   }
 });
 
-// ─── GET /api/careers/jobs/:id ─────────────────────────────────────────────
+// GET /api/careers/jobs/:id
 router.get('/jobs/:id', async (req, res) => {
   const jobId = parseInt(req.params.id, 10);
 
@@ -210,18 +137,9 @@ router.get('/jobs/:id', async (req, res) => {
     }
 
     const [[reqs], [resps], [bens]] = await Promise.all([
-      pool.query(
-        'SELECT requirement FROM job_requirements WHERE job_id = ? ORDER BY sort_order',
-        [jobId]
-      ),
-      pool.query(
-        'SELECT responsibility FROM job_responsibilities WHERE job_id = ? ORDER BY sort_order',
-        [jobId]
-      ),
-      pool.query(
-        'SELECT benefit FROM job_benefits WHERE job_id = ? ORDER BY sort_order',
-        [jobId]
-      ),
+      pool.query('SELECT requirement FROM job_requirements WHERE job_id = ? ORDER BY sort_order', [jobId]),
+      pool.query('SELECT responsibility FROM job_responsibilities WHERE job_id = ? ORDER BY sort_order', [jobId]),
+      pool.query('SELECT benefit FROM job_benefits WHERE job_id = ? ORDER BY sort_order', [jobId]),
     ]);
 
     return res.json({
@@ -243,7 +161,7 @@ router.get('/jobs/:id', async (req, res) => {
   }
 });
 
-// ─── POST /api/careers/jobs ────────────────────────────────────────────────
+// POST /api/careers/jobs
 router.post('/jobs', authMiddleware, async (req, res) => {
   const {
     title,
@@ -313,13 +231,10 @@ router.post('/jobs', authMiddleware, async (req, res) => {
     return res.status(201).json({
       success: true,
       message: 'Job created.',
-      data: {
-        id: jobId,
-      },
+      data: { id: jobId },
     });
   } catch (err) {
     await conn.rollback();
-
     console.error('Create job error:', err);
 
     return res.status(500).json({
@@ -331,7 +246,7 @@ router.post('/jobs', authMiddleware, async (req, res) => {
   }
 });
 
-// ─── PUT /api/careers/jobs/:id ─────────────────────────────────────────────
+// PUT /api/careers/jobs/:id
 router.put('/jobs/:id', authMiddleware, async (req, res) => {
   const jobId = parseInt(req.params.id, 10);
 
@@ -405,7 +320,6 @@ router.put('/jobs/:id', authMiddleware, async (req, res) => {
     });
   } catch (err) {
     await conn.rollback();
-
     console.error('Update job error:', err);
 
     return res.status(500).json({
@@ -417,7 +331,7 @@ router.put('/jobs/:id', authMiddleware, async (req, res) => {
   }
 });
 
-// ─── DELETE /api/careers/jobs/:id ──────────────────────────────────────────
+// DELETE /api/careers/jobs/:id
 router.delete('/jobs/:id', authMiddleware, async (req, res) => {
   const jobId = parseInt(req.params.id, 10);
 
