@@ -50,7 +50,7 @@ const talentValidation = [
 
 // ─── POST /api/careers/talent-network ─────────────────────────────────────
 // Only saves data. Email with PDF should be sent from upload/resume route.
-router.post('/api/talent-network', careerLimiter, talentValidation, async (req, res) => {
+router.post('/talent-network', careerLimiter, talentValidation, async (req, res) => {
   const errors = validationResult(req);
 
   if (!errors.isEmpty()) {
