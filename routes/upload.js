@@ -184,15 +184,27 @@ router.post('/resume', uploadLimiter, upload.single('resume'), resumeValidation,
 });
 
 // ─── GET /api/upload/files/:filename  (admin-protected download) ───────────
+// GET /api/upload/files/:filename
 router.get('/files/:filename', authMiddleware, (req, res) => {
-  // Prevent path traversal
   const safeName = path.basename(req.params.filename);
   const filePath = path.join(uploadsDir, safeName);
 
   if (!fs.existsSync(filePath)) {
     return res.status(404).json({ success: false, message: 'File not found.' });
   }
-  res.download(filePath);
+
+  const ext = path.extname(safeName).toLowerCase();
+  const mimeMap = {
+    '.pdf':  'application/pdf',
+    '.doc':  'application/msword',
+    '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    '.txt':  'text/plain',
+  };
+
+  const contentType = mimeMap[ext] || 'application/octet-stream';
+  res.setHeader('Content-Type', contentType);
+  res.setHeader('Content-Disposition', 'inline');   // <-- key change
+  res.sendFile(filePath);
 });
 
 // ─── Multer error handler ──────────────────────────────────────────────────
