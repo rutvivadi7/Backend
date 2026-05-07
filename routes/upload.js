@@ -2,7 +2,8 @@ import express from 'express';
 import multer  from 'multer';
 import path    from 'path';
 import fs      from 'fs';
-import nodemailer from 'nodemailer';               // ← NEW
+import jwt     from 'jsonwebtoken';
+import nodemailer from 'nodemailer';
 import { body, validationResult } from 'express-validator';
 import rateLimit from 'express-rate-limit';
 import pool from '../db.js';
@@ -52,7 +53,6 @@ const cleanup = (file) => {
   if (file) fs.unlink(file.path, () => {});
 };
 
-// ─── NEW: reusable transporter factory (same pattern as contact.js) ────────
 const createTransporter = () => {
   if (!process.env.EMAIL_HOST || !process.env.EMAIL_USER || !process.env.EMAIL_PASS) return null;
   return nodemailer.createTransport({
@@ -92,7 +92,6 @@ router.post('/resume', uploadLimiter, upload.single('resume'), resumeValidation,
       ]
     );
 
-    // ─── Send email notification with resume attached ──────────────────
     const transporter = createTransporter();
     if (transporter) {
       const fileSizeKB = (req.file.size / 1024).toFixed(0);
@@ -141,30 +140,25 @@ router.post('/resume', uploadLimiter, upload.single('resume'), resumeValidation,
                   </td>
                 </tr>
               </table>
-
               <div style="margin-top:16px;padding:12px;background:#ede9fe;border-radius:6px;font-size:13px;color:#5b21b6;text-align:center">
                 📎 Resume is attached to this email — open the attachment below.
               </div>
-
               <p style="margin-top:20px;font-size:12px;color:#6b7280;text-align:center">
                 JKC Construction — Resume Upload Notification
               </p>
             </div>
           </div>`,
-
-        // ── Attach the actual resume file ──────────────────────────────
         attachments: [
           {
-            filename: req.file.originalname,          // original name e.g. "Rutvi_Resume.pdf"
-            path:     req.file.path,                  // absolute path on disk
-            contentType: req.file.mimetype,           // e.g. application/pdf
+            filename:    req.file.originalname,
+            path:        req.file.path,
+            contentType: req.file.mimetype,
           },
         ],
       }).catch(mailErr => {
         console.warn('Resume upload email failed (file still saved):', mailErr.message);
       });
     }
-    // ──────────────────────────────────────────────────────────────────────
 
     res.json({
       success: true,
@@ -183,9 +177,22 @@ router.post('/resume', uploadLimiter, upload.single('resume'), resumeValidation,
   }
 });
 
-// ─── GET /api/upload/files/:filename  (admin-protected download) ───────────
-// GET /api/upload/files/:filename
-router.get('/files/:filename', authMiddleware, (req, res) => {
+// ─── GET /api/upload/files/:filename/view  (inline — token via query param) ──
+// window.open() cannot set headers, so we accept token as ?token=xxx here only.
+router.get('/files/:filename/view', (req, res) => {
+  // Accept token from Authorization header OR query param (for window.open)
+  const token = req.headers.authorization?.split(' ')[1] || req.query.token;
+
+  if (!token) {
+    return res.status(401).json({ success: false, message: 'Unauthorized.' });
+  }
+
+  try {
+    jwt.verify(token, process.env.JWT_SECRET);
+  } catch {
+    return res.status(401).json({ success: false, message: 'Invalid or expired token.' });
+  }
+
   const safeName = path.basename(req.params.filename);
   const filePath = path.join(uploadsDir, safeName);
 
@@ -193,18 +200,29 @@ router.get('/files/:filename', authMiddleware, (req, res) => {
     return res.status(404).json({ success: false, message: 'File not found.' });
   }
 
-  const ext = path.extname(safeName).toLowerCase();
   const mimeMap = {
     '.pdf':  'application/pdf',
     '.doc':  'application/msword',
     '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     '.txt':  'text/plain',
   };
+  const ext = path.extname(safeName).toLowerCase();
 
-  const contentType = mimeMap[ext] || 'application/octet-stream';
-  res.setHeader('Content-Type', contentType);
-  res.setHeader('Content-Disposition', 'inline');   // <-- key change
+  res.setHeader('Content-Type', mimeMap[ext] || 'application/octet-stream');
+  res.setHeader('Content-Disposition', 'inline');
   res.sendFile(filePath);
+});
+
+// ─── GET /api/upload/files/:filename/download  (forces download, header auth) ─
+router.get('/files/:filename/download', authMiddleware, (req, res) => {
+  const safeName = path.basename(req.params.filename);
+  const filePath = path.join(uploadsDir, safeName);
+
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ success: false, message: 'File not found.' });
+  }
+
+  res.download(filePath, safeName);
 });
 
 // ─── Multer error handler ──────────────────────────────────────────────────
