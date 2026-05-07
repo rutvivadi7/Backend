@@ -319,4 +319,14 @@ router.delete('/projects/:id', [param('id').isInt({ min: 1 })], async (req, res)
   }
 });
 
+router.delete('/contacts/:id', authMiddleware, async (req, res) => {
+  await pool.query('DELETE FROM contact_submissions WHERE id = ?', [req.params.id]);
+  res.json({ success: true });
+});
+
+router.delete('/talents/:id', authMiddleware, async (req, res) => {
+  await pool.query('DELETE FROM talent_network WHERE id = ?', [req.params.id]);
+  res.json({ success: true });
+});
+
 export default router;
