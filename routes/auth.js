@@ -13,7 +13,7 @@ const loginLimiter = rateLimit({
   max: 10,
   message: { success: false, message: 'Too many login attempts. Try again in 15 minutes.' },
 });
-const token = req.headers.authorization?.split(' ')[1] || req.query.token;
+
 // ─── POST /api/auth/login ──────────────────────────────────────────────────
 router.post(
   '/login',
