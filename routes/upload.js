@@ -16,10 +16,7 @@ const uploadLimiter = rateLimit({
   max: 5,
   message: { success: false, message: 'Too many file uploads. Please try again later.' },
 });
-
-// Ensure uploads directory exists
-const uploadsDir = path.resolve(process.env.UPLOAD_PATH || './uploads');
-if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+const storage = multer.memoryStorage();
 
 const ALLOWED_TYPES = ['.pdf', '.doc', '.docx', '.txt'];
 
@@ -76,21 +73,21 @@ router.post('/resume', uploadLimiter, upload.single('resume'), resumeValidation,
       return res.status(400).json({ success: false, message: 'Please upload a resume file.' });
     }
 
-    const { firstName, lastName, email, phone, position } = req.body;
-    const ip = req.ip || req.socket.remoteAddress;
+  const fileName = `resume-${Date.now()}-${Math.round(Math.random() * 1e9)}${path.extname(req.file.originalname).toLowerCase()}`;
 
-    const [result] = await pool.query(
-      `INSERT INTO resume_uploads
-         (first_name, last_name, email, phone, position, file_name, original_name, file_size, file_type, ip_address)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        firstName, lastName, email, phone || '', position,
-        req.file.filename, req.file.originalname,
-        req.file.size,
-        path.extname(req.file.originalname).toLowerCase().replace('.', ''),
-        ip,
-      ]
-    );
+const [result] = await pool.query(
+  `INSERT INTO resume_uploads
+     (first_name, last_name, email, phone, position, file_name, original_name, file_size, file_type, ip_address, file_data)
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  [
+    firstName, lastName, email, phone || '', position,
+    fileName, req.file.originalname,
+    req.file.size,
+    path.extname(req.file.originalname).toLowerCase().replace('.', ''),
+    ip,
+    req.file.buffer,
+  ]
+);
 
     const transporter = createTransporter();
     if (transporter) {
@@ -151,7 +148,7 @@ router.post('/resume', uploadLimiter, upload.single('resume'), resumeValidation,
         attachments: [
           {
             filename:    req.file.originalname,
-            path:        req.file.path,
+            content:     req.file.buffer, 
             contentType: req.file.mimetype,
           },
         ],
@@ -178,51 +175,46 @@ router.post('/resume', uploadLimiter, upload.single('resume'), resumeValidation,
 });
 
 // ─── GET /api/upload/files/:filename/view  (inline — token via query param) ──
-// window.open() cannot set headers, so we accept token as ?token=xxx here only.
-router.get('/files/:filename/view', (req, res) => {
-  // Accept token from Authorization header OR query param (for window.open)
+router.get('/files/:filename/view', async (req, res) => {
   const token = req.headers.authorization?.split(' ')[1] || req.query.token;
-
-  if (!token) {
-    return res.status(401).json({ success: false, message: 'Unauthorized.' });
-  }
+  if (!token) return res.status(401).json({ success: false, message: 'Unauthorized.' });
+  try { jwt.verify(token, process.env.JWT_SECRET); }
+  catch { return res.status(401).json({ success: false, message: 'Invalid token.' }); }
 
   try {
-    jwt.verify(token, process.env.JWT_SECRET);
-  } catch {
-    return res.status(401).json({ success: false, message: 'Invalid or expired token.' });
+    const [rows] = await pool.query(
+      'SELECT file_data, original_name, file_type FROM resume_uploads WHERE file_name = ?',
+      [req.params.filename]
+    );
+    if (!rows.length || !rows[0].file_data) {
+      return res.status(404).json({ success: false, message: 'File not found.' });
+    }
+    const mimeMap = { pdf: 'application/pdf', doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', txt: 'text/plain' };
+    res.setHeader('Content-Type', mimeMap[rows[0].file_type] || 'application/octet-stream');
+    res.setHeader('Content-Disposition', 'inline');
+    res.send(rows[0].file_data);
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Server error.' });
   }
-
-  const safeName = path.basename(req.params.filename);
-  const filePath = path.join(uploadsDir, safeName);
-
-  if (!fs.existsSync(filePath)) {
-    return res.status(404).json({ success: false, message: 'File not found.' });
-  }
-
-  const mimeMap = {
-    '.pdf':  'application/pdf',
-    '.doc':  'application/msword',
-    '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    '.txt':  'text/plain',
-  };
-  const ext = path.extname(safeName).toLowerCase();
-
-  res.setHeader('Content-Type', mimeMap[ext] || 'application/octet-stream');
-  res.setHeader('Content-Disposition', 'inline');
-  res.sendFile(filePath);
 });
 
 // ─── GET /api/upload/files/:filename/download  (forces download, header auth) ─
-router.get('/files/:filename/download', authMiddleware, (req, res) => {
-  const safeName = path.basename(req.params.filename);
-  const filePath = path.join(uploadsDir, safeName);
-
-  if (!fs.existsSync(filePath)) {
-    return res.status(404).json({ success: false, message: 'File not found.' });
+router.get('/files/:filename/download', authMiddleware, async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      'SELECT file_data, original_name, file_type FROM resume_uploads WHERE file_name = ?',
+      [req.params.filename]
+    );
+    if (!rows.length || !rows[0].file_data) {
+      return res.status(404).json({ success: false, message: 'File not found.' });
+    }
+    const mimeMap = { pdf: 'application/pdf', doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', txt: 'text/plain' };
+    res.setHeader('Content-Type', mimeMap[rows[0].file_type] || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="${rows[0].original_name}"`);
+    res.send(rows[0].file_data);
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Server error.' });
   }
-
-  res.download(filePath, safeName);
 });
 
 // ─── Multer error handler ──────────────────────────────────────────────────
